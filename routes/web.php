@@ -62,11 +62,11 @@ Route::middleware(['auth', 'force.password.change'])->group(function () {
     Route::post('/settings', [App\Http\Controllers\SettingController::class, 'update'])->name('settings.update');
     Route::post('/settings/test-email', [App\Http\Controllers\SettingController::class, 'testEmail'])->name('settings.test-email');
 
-
-
-
     // Audit logs
     Route::get('/audit-logs', [App\Http\Controllers\AuditLogController::class, 'index'])->name('audit-logs.index');
+
+    // Alertes
+    Route::get('/alerts', [App\Http\Controllers\AlertController::class, 'index'])->name('alerts.index');
 });
 
 // Réinitialisation autonome mot de passe

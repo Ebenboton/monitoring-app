@@ -32,8 +32,6 @@ class SettingController extends Controller
     public function update(Request $request)
     {
         if (!auth()->check() || !auth()->user()->isSuperAdmin()) abort(403);
-        abort(403);
-
 
         $data = $request->validate([
             'mail_host'              => 'required|string|max:255',
@@ -104,14 +102,30 @@ class SettingController extends Controller
             'test_email' => 'required|email',
         ]);
 
+        /*
+         * Récupération de l'expéditeur configuré.
+         *
+         * Exemple accepté :
+         * M-Monitoring <botonben7@gmail.com>
+         *
+         * Le système séparera automatiquement :
+         * - Nom      : M-Monitoring
+         * - Adresse  : botonben7@gmail.com
+         */
+        [$fromAddress, $fromName] = $this->parseMailFrom(
+            Setting::get('mail_from')
+        );
+
         config([
             'mail.mailers.smtp.host'       => Setting::get('mail_host', 'smtp.gmail.com'),
             'mail.mailers.smtp.port'       => (int) Setting::get('mail_port', 587),
             'mail.mailers.smtp.encryption' => Setting::get('mail_encryption', 'tls'),
             'mail.mailers.smtp.username'   => Setting::get('mail_username'),
             'mail.mailers.smtp.password'   => Setting::get('mail_password'),
-            'mail.from.address'            => Setting::get('mail_username'),
-            'mail.from.name'               => 'M-Monitoring',
+
+            // Expéditeur correctement séparé
+            'mail.from.address'            => $fromAddress,
+            'mail.from.name'               => $fromName,
         ]);
 
         app()->forgetInstance('mailer');
@@ -121,12 +135,20 @@ class SettingController extends Controller
         try {
             Mail::raw(
                 "Ceci est un email de test envoyé depuis M-Monitoring.\n\nSi vous recevez cet email, la configuration SMTP est correcte.",
-                fn($m) => $m->to($request->test_email)->subject('M-Monitoring — Test SMTP')
+                fn($m) => $m
+                    ->to($request->test_email)
+                    ->subject('M-Monitoring — Test SMTP')
             );
 
-            return back()->with('success', "Email de test envoyé à {$request->test_email}.");
+            return back()->with(
+                'success',
+                "Email de test envoyé à {$request->test_email}."
+            );
         } catch (\Exception $e) {
-            return back()->with('error', "Échec de l'envoi : " . $e->getMessage());
+            return back()->with(
+                'error',
+                "Échec de l'envoi : " . $e->getMessage()
+            );
         }
     }
 
@@ -137,15 +159,111 @@ class SettingController extends Controller
      */
     private function applyMailConfig(): void
     {
+        /*
+         * Récupération et séparation de l'expéditeur.
+         *
+         * Exemple :
+         * M-Monitoring <botonben7@gmail.com>
+         *
+         * devient :
+         * address = botonben7@gmail.com
+         * name    = M-Monitoring
+         */
+        [$fromAddress, $fromName] = $this->parseMailFrom(
+            Setting::get('mail_from')
+        );
+
         config([
             'mail.mailers.smtp.host'       => Setting::get('mail_host'),
             'mail.mailers.smtp.port'       => Setting::get('mail_port'),
             'mail.mailers.smtp.encryption' => Setting::get('mail_encryption'),
             'mail.mailers.smtp.username'   => Setting::get('mail_username'),
             'mail.mailers.smtp.password'   => Setting::get('mail_password'),
-            'mail.from.address'            => Setting::get('mail_username'),
-            'mail.from.name'               => 'M-Monitoring',
+
+            // Expéditeur correctement configuré
+            'mail.from.address'            => $fromAddress,
+            'mail.from.name'               => $fromName,
         ]);
+    }
+
+
+
+    /**
+     * Sépare le nom et l'adresse email de l'expéditeur.
+     *
+     * Formats acceptés :
+     *
+     * M-Monitoring <botonben7@gmail.com>
+     *
+     * ou simplement :
+     *
+     * botonben7@gmail.com
+     *
+     * Retourne :
+     *
+     * [
+     *     'botonben7@gmail.com',
+     *     'M-Monitoring'
+     * ]
+     */
+    private function parseMailFrom(?string $mailFrom): array
+    {
+        $mailFrom = trim((string) $mailFrom);
+
+        /*
+         * Format :
+         * Nom <email@example.com>
+         */
+        if (preg_match('/^(.*?)\s*<\s*([^<>]+)\s*>$/', $mailFrom, $matches)) {
+
+            $name = trim($matches[1]);
+            $address = trim($matches[2]);
+
+            /*
+             * Si le nom est vide, on utilise M-Monitoring.
+             */
+            if ($name === '') {
+                $name = 'M-Monitoring';
+            }
+
+            return [
+                $address,
+                $name,
+            ];
+        }
+
+        /*
+         * Si seule l'adresse email est fournie.
+         */
+        if (filter_var($mailFrom, FILTER_VALIDATE_EMAIL)) {
+            return [
+                $mailFrom,
+                'M-Monitoring',
+            ];
+        }
+
+        /*
+         * Sécurité :
+         * si la valeur enregistrée n'est pas valide,
+         * on utilise l'identifiant SMTP comme adresse.
+         */
+        $username = trim((string) Setting::get('mail_username'));
+
+        if (filter_var($username, FILTER_VALIDATE_EMAIL)) {
+            return [
+                $username,
+                'M-Monitoring',
+            ];
+        }
+
+        /*
+         * Dernier recours.
+         * Cette valeur devra normalement être corrigée dans les paramètres.
+         */
+        return [
+            $mailFrom,
+            'M-Monitoring',
+        ];
     }
 
 
