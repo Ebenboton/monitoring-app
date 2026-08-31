@@ -81,16 +81,20 @@ class ApplicationController extends Controller
     public function show(Application $application)
     {
         $recentChecks = $application->checks()
+            ->where('checked_at', '>=', now()->subDay())
             ->orderByDesc('checked_at')
-            ->limit(50)
-            ->get();
+            ->paginate(15);
+
+        $total24h = $application->checks()
+            ->where('checked_at', '>=', now()->subDay())
+            ->count();
 
         $openIncident = $application->incidents()
             ->where('is_resolved', false)
             ->latest('started_at')
             ->first();
 
-        return view('applications.show', compact('application', 'recentChecks', 'openIncident'));
+        return view('applications.show', compact('application', 'recentChecks', 'total24h', 'openIncident'));
     }
 
     public function edit(Application $application)
