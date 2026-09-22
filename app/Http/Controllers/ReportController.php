@@ -14,20 +14,22 @@ use Illuminate\Support\Carbon;
  *
  * Rôle : génère les rapports SLA et statistiques de surveillance.
  *
- * index()  → page principale des rapports avec KPIs et tableau SLA
+ * index()  → page principale des rapports avec KPIs, graphiques et tableau SLA
  * export() → export CSV des données brutes de checks
  *
  * Métriques calculées :
  * - Uptime % = (checks UP / total checks) × 100
  * - MTTR     = durée moyenne de résolution des incidents
  * - Alertes  = nombre d'emails envoyés sur la période
+ * - Latence moyenne par jour et par application (pour le graphique Chart.js)
+ * - Répartition des statuts de checks (pour le camembert Chart.js)
  */
 class ReportController extends Controller
 {
     public function index(Request $request)
     {
         // Trouve le premier check enregistré pour déterminer depuis quand on surveille
-        $firstCheck = \App\Models\Check::oldest('checked_at')->first();
+        $firstCheck = Check::oldest('checked_at')->first();
         $firstMonth = $firstCheck
             ? Carbon::parse($firstCheck->checked_at)->startOfMonth()
             : now()->startOfMonth();
@@ -112,6 +114,61 @@ class ReportController extends Controller
         $failedAlerts = Alert::whereBetween('created_at', [$startDate, $endDate])
             ->where('status', 'failed')->count();
 
+        // ─────────── Données du graphique de latence ───────────
+        // Moyenne de latence par jour et par application (agrégation SQL)
+        $latencyRows = Check::query()
+            ->selectRaw('application_id, DATE(checked_at) as day, ROUND(AVG(response_time_ms)) as avg_ms')
+            ->whereBetween('checked_at', [$startDate, $endDate])
+            ->whereNotNull('response_time_ms')
+            ->groupBy('application_id', 'day')
+            ->get()
+            ->groupBy('application_id');
+
+        // Construit la liste des jours de la période (même les jours sans check)
+        $days   = [];
+        $labels = [];
+        $cursor = $startDate->copy()->startOfDay();
+        while ($cursor->lte($endDate)) {
+            $days[]   = $cursor->format('Y-m-d');
+            $labels[] = $cursor->format('d/m');
+            $cursor->addDay();
+        }
+
+        // Palette de couleurs, une par application
+        $palette = ['#14b8a6', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#84cc16'];
+
+        $latencyDatasets = [];
+        $i = 0;
+        foreach ($applications as $app) {
+            $rows = $latencyRows->get($app->id);
+            if (!$rows) {
+                continue; // aucune donnée pour cette app sur la période
+            }
+
+            $byDay = $rows->keyBy(fn($r) => (string) $r->day);
+
+            $data = [];
+            foreach ($days as $day) {
+                // null = trou dans la courbe (pas de check ce jour-là)
+                $data[] = isset($byDay[$day]) ? (int) $byDay[$day]->avg_ms : null;
+            }
+
+            $latencyDatasets[] = [
+                'label' => $app->name,
+                'data'  => $data,
+                'color' => $palette[$i % count($palette)],
+            ];
+            $i++;
+        }
+
+        // ─────────── Répartition des statuts sur la période ───────────
+        $statusCounts = Check::query()
+            ->selectRaw('status, COUNT(*) as total')
+            ->whereBetween('checked_at', [$startDate, $endDate])
+            ->groupBy('status')
+            ->pluck('total', 'status')
+            ->toArray();
+
         return view('reports.index', compact(
             'appStats',
             'globalUptime',
@@ -122,7 +179,10 @@ class ReportController extends Controller
             'selectedMonth',
             'availableMonths',
             'startDate',
-            'endDate'
+            'endDate',
+            'labels',
+            'latencyDatasets',
+            'statusCounts'
         ));
     }
 
@@ -151,7 +211,7 @@ class ReportController extends Controller
             'Content-Disposition' => "attachment; filename=\"{$filename}\"",
         ];
 
-        $callback = function () use ($checks, $startDate, $endDate, $selectedMonth) {
+        $callback = function () use ($checks, $selectedMonth) {
             $handle = fopen('php://output', 'w');
             fputs($handle, "\xEF\xBB\xBF");
 

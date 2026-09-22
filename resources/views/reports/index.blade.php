@@ -92,6 +92,78 @@
     </div>
 </div>
 
+{{-- ═══════════ Graphiques ═══════════ --}}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+
+    {{-- Courbe de latence --}}
+    <div class="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6">
+        <div class="flex items-center justify-between mb-5">
+            <div>
+                <h3 class="font-semibold text-gray-800 dark:text-gray-100">Latence moyenne par jour</h3>
+                <p class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                    En millisecondes — une courbe par application
+                </p>
+            </div>
+        </div>
+
+        @if(count($latencyDatasets) > 0)
+            <div class="relative" style="height: 300px;">
+                <canvas id="latencyChart"></canvas>
+            </div>
+        @else
+            <div class="flex items-center justify-center text-sm text-gray-400 dark:text-gray-500" style="height: 300px;">
+                Aucune donnée de latence sur cette période.
+            </div>
+        @endif
+    </div>
+
+    {{-- Répartition des statuts --}}
+    <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-6">
+        <h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-1">Répartition des checks</h3>
+        <p class="text-xs text-gray-400 dark:text-gray-500 mb-5">
+            {{ array_sum($statusCounts) }} vérification(s)
+        </p>
+
+        @if(array_sum($statusCounts) > 0)
+            <div class="relative" style="height: 220px;">
+                <canvas id="statusChart"></canvas>
+            </div>
+
+            {{-- Légende détaillée sous le camembert --}}
+            <div class="mt-5 space-y-2">
+                @php
+                    $statusMeta = [
+                        'UP'    => ['Opérationnel', '#10b981'],
+                        'SLOW'  => ['Dégradé',      '#f59e0b'],
+                        'DOWN'  => ['En panne',     '#ef4444'],
+                        'ERROR' => ['Erreur',       '#991b1b'],
+                    ];
+                    $totalChecks = array_sum($statusCounts);
+                @endphp
+                @foreach($statusMeta as $key => [$label, $color])
+                    @if(!empty($statusCounts[$key]))
+                        @php $pct = round(($statusCounts[$key] / $totalChecks) * 100, 1); @endphp
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="flex items-center gap-2 text-gray-600 dark:text-gray-400">
+                                <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background: {{ $color }}"></span>
+                                {{ $label }}
+                            </span>
+                            <span class="font-medium text-gray-800 dark:text-gray-200">
+                                {{ $pct }}%
+                                <span class="text-xs text-gray-400 dark:text-gray-500 ml-1">({{ $statusCounts[$key] }})</span>
+                            </span>
+                        </div>
+                    @endif
+                @endforeach
+            </div>
+        @else
+            <div class="flex items-center justify-center text-sm text-gray-400 dark:text-gray-500" style="height: 220px;">
+                Aucun check sur cette période.
+            </div>
+        @endif
+    </div>
+</div>
+
 {{-- Tableau SLA par application --}}
 <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
     <div class="px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
@@ -200,5 +272,160 @@
         </table>
     </div>
 </div>
+
+{{-- ═══════════ Chart.js ═══════════ --}}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    const labels       = @json($labels);
+    const latencyData  = @json($latencyDatasets);
+    const statusCounts = @json($statusCounts);
+
+    let latencyChart = null;
+    let statusChart  = null;
+
+    // Couleurs adaptées au thème clair/sombre
+    function theme() {
+        const dark = document.documentElement.classList.contains('dark');
+        return {
+            text: dark ? '#9ca3af' : '#6b7280',
+            grid: dark ? 'rgba(75,85,99,0.25)' : 'rgba(229,231,235,0.9)',
+            tooltipBg: dark ? '#1f2937' : '#ffffff',
+            tooltipText: dark ? '#f3f4f6' : '#111827',
+            border: dark ? '#374151' : '#e5e7eb',
+        };
+    }
+
+    function buildLatency() {
+        const el = document.getElementById('latencyChart');
+        if (!el || latencyData.length === 0) return;
+
+        const t = theme();
+
+        latencyChart = new Chart(el, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: latencyData.map(d => ({
+                    label: d.label,
+                    data: d.data,
+                    borderColor: d.color,
+                    backgroundColor: d.color + '20',
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                    tension: 0.35,
+                    spanGaps: true,
+                    fill: false,
+                }))
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        align: 'end',
+                        labels: {
+                            color: t.text,
+                            boxWidth: 10,
+                            boxHeight: 10,
+                            usePointStyle: true,
+                            pointStyle: 'circle',
+                            padding: 16,
+                            font: { size: 11 },
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: t.tooltipBg,
+                        titleColor: t.tooltipText,
+                        bodyColor: t.tooltipText,
+                        borderColor: t.border,
+                        borderWidth: 1,
+                        padding: 10,
+                        callbacks: {
+                            label: ctx => ` ${ctx.dataset.label} : ${ctx.parsed.y} ms`
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: t.grid, drawBorder: false },
+                        ticks: { color: t.text, font: { size: 11 }, maxRotation: 0, autoSkipPadding: 20 }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: t.grid, drawBorder: false },
+                        ticks: {
+                            color: t.text,
+                            font: { size: 11 },
+                            callback: v => v + ' ms'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function buildStatus() {
+        const el = document.getElementById('statusChart');
+        if (!el) return;
+
+        const colors = { UP: '#10b981', SLOW: '#f59e0b', DOWN: '#ef4444', ERROR: '#991b1b' };
+        const keys   = Object.keys(statusCounts);
+        if (keys.length === 0) return;
+
+        const t = theme();
+
+        statusChart = new Chart(el, {
+            type: 'doughnut',
+            data: {
+                labels: keys,
+                datasets: [{
+                    data: keys.map(k => statusCounts[k]),
+                    backgroundColor: keys.map(k => colors[k] || '#9ca3af'),
+                    borderWidth: 0,
+                    hoverOffset: 6,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '65%',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: t.tooltipBg,
+                        titleColor: t.tooltipText,
+                        bodyColor: t.tooltipText,
+                        borderColor: t.border,
+                        borderWidth: 1,
+                        padding: 10,
+                        callbacks: {
+                            label: ctx => ` ${ctx.label} : ${ctx.parsed} check(s)`
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function render() {
+        if (latencyChart) { latencyChart.destroy(); latencyChart = null; }
+        if (statusChart)  { statusChart.destroy();  statusChart  = null; }
+        buildLatency();
+        buildStatus();
+    }
+
+    render();
+
+    // Redessine les graphiques quand on bascule clair/sombre
+    new MutationObserver(render).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class']
+    });
+})();
+</script>
 
 @endsection
