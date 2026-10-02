@@ -17,7 +17,7 @@ class MonitorService
             return $this->saveCheck($app, 'UP', null, null, null, null, null, null, 'Maintenance active');
         }
 
-        $result = $this->performCheck($app);
+        $result = $this->performCheckWithRetry($app);
         $this->updateApplicationStatus($app, $result);
         $incident = $this->handleIncident($app, $result);
 
@@ -34,6 +34,32 @@ class MonitorService
     }
 
 
+    /**
+     * Exécute le check et le répète en cas d'échec (DOWN/ERROR),
+     * jusqu'à retry_count tentatives au total.
+     * Seul le résultat final est conservé en base.
+     */
+    private function performCheckWithRetry(Application $app): Check
+    {
+        $attempts = max(1, (int) $app->retry_count);
+
+        for ($i = 1; $i <= $attempts; $i++) {
+            $result = $this->performCheck($app);
+
+            // Succès (UP ou SLOW) ou dernière tentative : on garde ce résultat
+            if (!in_array($result->status, ['DOWN', 'ERROR']) || $i === $attempts) {
+                return $result;
+            }
+
+            // Échec intermédiaire : on supprime la ligne pour ne pas fausser l'uptime
+            $result->delete();
+            sleep(5);
+        }
+
+        return $result;
+    }
+
+    
     private function performCheck(Application $app): Check
     {
         $startTime = microtime(true);
@@ -305,7 +331,7 @@ class MonitorService
             return null;
         }
     }
-    
+
     private function detectRootCause(Check $check): string
     {
         if ($check->auth_ok === false)        return 'auth';

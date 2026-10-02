@@ -538,4 +538,11 @@ $openIncidents = \App\Models\Incident::with('application')
     });
 </script>
 
+@if(session('refreshing'))
+<script>
+    // Recharge la page une fois les checks terminés
+    setTimeout(() => window.location.href = "{{ route('applications.index') }}", 15000);
+</script>
+@endif
+
 @endsection
